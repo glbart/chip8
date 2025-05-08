@@ -1,4 +1,4 @@
-### Простой эмулятор CHIP8 на Rust
+### Простой эмулятор [CHIP8](https://en.wikipedia.org/wiki/CHIP-8) на Rust
 
 ```
 Usage: cpu --file <FILE>
