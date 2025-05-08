@@ -1,4 +1,14 @@
+use anyhow::{*, Context, Result};
+use clap::Parser;
 use std::fs;
+
+#[derive(Parser, Debug)]
+#[command(name = "CHIP8 emulator", about = "A simple chip8 emulator on rust")]
+struct Cli {
+    /// Path to the program (in binary format)
+    #[arg(short, long)]
+    file: std::path::PathBuf,
+}
 
 #[derive(Debug)]
 struct CPU {
@@ -183,7 +193,7 @@ impl CPU {
             self.registers[0xF] = 0;
         }
     }
-    
+
     fn shl_x(&mut self, x: u8) {
         let val_x = self.registers[x as usize];
         self.registers[x as usize] <<= 1;
@@ -211,7 +221,17 @@ impl Display {
     }
 }
 
-fn main() {
+fn main() -> Result<()> {
+    let args = Cli::parse();
+
+    let program = fs::read(&args.file)
+        .with_context(|| format!("Couldn't read program `{}`", &args.file.display()))?;
+    let program_len = program.len();
+
+    if program_len == 0 {
+        return Err(anyhow!("Program don't contains code!!!"));
+    }
+    
     let mut cpu = CPU {
         registers: [0; 16],
         memory: [0; 4096],
@@ -221,10 +241,6 @@ fn main() {
         display: Display::new(),
     };
 
-    //let program = fs::read("add.ch8").unwrap();
-    let program = fs::read("cond.ch8").unwrap();
-    let program_len = program.len();
-
     let mem = &mut cpu.memory;
 
     mem[512..512 + program_len].copy_from_slice(&program);
@@ -232,4 +248,6 @@ fn main() {
     cpu.run();
 
     println!("{}", cpu.registers[0]);
+
+    Ok(())
 }
