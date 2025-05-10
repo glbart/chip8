@@ -6,3 +6,5 @@ Usage: cpu --file <FILE>
 Options:
   -f, --file <FILE>  Path to the program (in binary format)
 ```
+
+![IBM Logo](ibm_logo.png)
