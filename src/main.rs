@@ -1,5 +1,6 @@
-use anyhow::{*, Context, Result};
+use anyhow::{Context, Result, *};
 use clap::Parser;
+use minifb::{Window, WindowOptions};
 use std::fs;
 
 #[derive(Parser, Debug)]
@@ -13,6 +14,7 @@ struct Cli {
 #[derive(Debug)]
 struct CPU {
     registers: [u8; 16],
+    register_I: u16,
     position_in_memory: usize,
     memory: [u8; 0x1000],
     stack: [u16; 16],
@@ -30,7 +32,12 @@ impl CPU {
     }
 
     fn run(&mut self) {
+        let mut i = 0;
         loop {
+            i += 1;
+            if i > 100 {
+                break;
+            }
             let opcode = self.read_opcode();
             println!("instruction: {:x}", opcode);
             self.position_in_memory += 2;
@@ -65,6 +72,11 @@ impl CPU {
                 (0x8, _, _, 0x6) => self.shr_x(x),
                 (0x8, _, _, 0x7) => self.subn_xy(x, y),
                 (0x8, _, _, 0xE) => self.shl_x(x),
+                (0x9, _, _, 0x0) => self.skip_if_neq_registers(x, y),
+                (0xA, _, _, _) => self.set_I(nnn),
+                (0xB, _, _, _) => self.jmp_to_addr_x(x, nnn),
+                (0xC, _, _, _) => self.set_rand_x(x, kk),
+                (0xD, _, _, _) => self.draw(x, y, d),
                 _ => todo!("opcode: {:04x}", opcode),
             }
         }
@@ -94,6 +106,7 @@ impl CPU {
     }
 
     fn jmp_to_addr(&mut self, addr: u16) {
+        println!("jump to addr: {:x}", addr);
         self.position_in_memory = addr as usize;
     }
 
@@ -200,26 +213,76 @@ impl CPU {
 
         self.registers[0xF] = val_x >> 7;
     }
+
+    fn skip_if_neq_registers(&mut self, x: u8, y: u8) {
+        if self.registers[x as usize] != self.registers[y as usize] {
+            self.position_in_memory += 2;
+        }
+    }
+
+    fn set_I(&mut self, addr: u16) {
+        self.register_I = addr;
+    }
+
+    fn jmp_to_addr_x(&mut self, x: u8, addr: u16) {
+        self.position_in_memory = (addr + (self.registers[x as usize] as u16)) as usize;
+    }
+
+    fn set_rand_x(&mut self, x: u8, kk: u8) {
+        self.registers[x as usize] = 1 & kk;
+    }
+
+    fn draw(&mut self, ix: u8, iy: u8, n: u8) {
+        println!("start draw");
+        let start_x: usize = (self.registers[ix as usize] % 64).into();
+        let start_y: usize = (self.registers[iy as usize] % 32).into();
+        println!("x: {}, y: {}", start_x, start_y);
+        self.registers[0xF] = 0;
+
+        let pixels = &mut self.display.pixels;
+
+        for i in 0..n as usize {
+            let y: usize = start_y + i;
+            let sprite = self.memory[(self.register_I + i as u16) as usize];
+            for j in 0..8 {
+                let x: usize = start_x + j;
+                let p = sprite & (1 << (7 - j));
+                println!("bit: {} | {:b} | {:b}", j, sprite, p);
+                if p > 0 && pixels[y][x] {
+                    pixels[y][x] = false;
+                    self.registers[0xF] = 1;
+                } else if (p == 0 && pixels[y][x]) || (p > 0 && !pixels[y][x])  {
+                    pixels[y][x] = true;
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
 struct Display {
-    pixels: [[bool; 32]; 64],
+    pixels: [[bool; 64]; 32],
 }
 
 impl Display {
     fn new() -> Self {
         Self {
-            pixels: [[false; 32]; 64],
+            pixels: [[false; 64]; 32],
         }
     }
 
     fn clear(&mut self) {
-        self.pixels
-            .iter_mut()
-            .for_each(|r| r.iter_mut().for_each(|v| *v = false));
+        // self.pixels
+        // .iter_mut()
+        //.for_each(|r| r.iter_mut().for_each(|v| *v = false));
     }
 }
+
+const BASE_WIDTH: usize = 640;
+const BASE_HEIGHT: usize = 320;
+const PADDING: usize = 30;
+const WIDTH: usize = PADDING + BASE_WIDTH + PADDING;
+const HEIGHT: usize = PADDING + BASE_HEIGHT + PADDING;
 
 fn main() -> Result<()> {
     let args = Cli::parse();
@@ -231,9 +294,10 @@ fn main() -> Result<()> {
     if program_len == 0 {
         return Err(anyhow!("Program don't contains code!!!"));
     }
-    
+
     let mut cpu = CPU {
         registers: [0; 16],
+        register_I: 0,
         memory: [0; 4096],
         position_in_memory: 512,
         stack: [0; 16],
@@ -246,6 +310,35 @@ fn main() -> Result<()> {
     mem[512..512 + program_len].copy_from_slice(&program);
 
     cpu.run();
+
+    let mut buffer: Vec<u32> = vec![0; WIDTH * HEIGHT];
+    let mut window = Window::new("CHIP8", WIDTH, HEIGHT, WindowOptions::default())
+        .with_context(|| "Couldn't create window".to_string())?;
+
+    window.set_target_fps(60);
+
+    while window.is_open() && !window.is_key_down(minifb::Key::Escape) {
+        for (i, p) in buffer.iter_mut().enumerate() {
+            let row = i / WIDTH;
+            let col = i % WIDTH + 1;
+            let inner_row: i32 = row as i32 - 30;
+            let inner_col: i32 = col as i32 - 30;
+            let virtual_row = inner_row / 10;
+            let virtual_col = inner_col / 10;
+            if row < PADDING || row >= PADDING + BASE_HEIGHT {
+                *p = 0x252429;
+            } else if col < PADDING || col >= PADDING + BASE_WIDTH {
+                *p = 0x252429;
+            } else if virtual_row < 32
+                && virtual_col < 64
+                && cpu.display.pixels[virtual_row as usize][virtual_col as usize]
+            {
+                *p = 0xFFFFFF;
+            }
+        }
+
+        window.update_with_buffer(&buffer, WIDTH, HEIGHT).unwrap();
+    }
 
     println!("{}", cpu.registers[0]);
 
